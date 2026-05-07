@@ -1,5 +1,7 @@
 # NVIDIA Omniverse DSX Blueprint for AI Factory Digital Twins
 
+#### Windows Explorer's native zip archiver may fail on deeply nested archives due to path length limitations. Use a third-party tool like 7-Zip to extract the content pack successfully.
+
 ## Overview
 
 The NVIDIA Omniverse DSX Blueprint is the digital twin manifestation of the DSX reference design, demonstrating to developers how to use Omniverse libraries for design, simulation, and operations across AI factory facilities and their hardware–software ecosystem.
@@ -61,6 +63,7 @@ Refer to the detailed [Technical Requirements](https://docs.omniverse.nvidia.com
 - [**(Linux) Docker**](https://docs.docker.com/engine/install/ubuntu/): For containerized development and deployment. **Ensure non-root users have Docker permissions.**
 - [**(Linux) NVIDIA Container Toolkit**](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html): For GPU-accelerated containerized development and deployment
 - [**VSCode**](https://code.visualstudio.com/download) (or your preferred IDE): For code editing and development
+- **Archive Extrator - Windows**: Windows Explorer's native zip archiver may fail on deeply nested archives due to path length limitations. Use a third-party tool like 7-Zip to extract the content pack successfully.
 
 ##### Web Portal Development Requirements
 - **Node.js and npm**: For frontend build and development
