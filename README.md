@@ -1,3 +1,304 @@
+# Leo DSX Development Guide: Mac VSCode + Brev Ubuntu L40S + Mac Chrome
+
+This fork is intended for the following workflow:
+
+- Edit code on the MacBook in VSCode.
+- Connect VSCode Remote SSH to a fresh NVIDIA Brev Ubuntu L40S GPU server.
+- Run the Omniverse DSX Kit streaming app and web frontend on the cloud Ubuntu server.
+- Open the frontend from Mac Chrome and connect it to the cloud Kit streaming server.
+- Treat the cloud server as disposable: every new Brev session starts from a clean disk, so setup must be repeatable.
+
+The recommended runtime path for the cloud server is Docker Compose. It keeps the Kit app and web frontend startup consistent across fresh Brev machines.
+
+## 0. Ports To Open On The Brev Server
+
+For Mac Chrome to connect to the cloud-hosted frontend and Omniverse WebRTC stream, the server must allow these inbound ports. VSCode SSH port forwarding is useful for editing, but it is not enough for the WebRTC media path because the stream uses TCP and UDP media ports.
+
+| Purpose | Protocol | Port(s) |
+| --- | --- | --- |
+| Web frontend, Docker Compose | TCP | `8080` |
+| Web frontend, direct Vite dev server | TCP | `8081` |
+| Kit WebRTC signaling | TCP | `49100` |
+| Kit control / health | TCP | `8111` |
+| DSX AI agent API | TCP | `8012` |
+| WebRTC media | TCP + UDP | `47995-48012` |
+| Additional WebRTC media | TCP + UDP | `49000-49007` |
+| WebRTC UDP helper | UDP | `1024` |
+
+If Brev gives you a public hostname, use that hostname in the browser URL. If it gives you a public IP, use the IP.
+
+```bash
+export DSX_HOST="<brev-public-ip-or-hostname>"
+```
+
+Chrome URL for the Docker Compose path:
+
+```text
+http://<brev-public-ip-or-hostname>:8080?server=<brev-public-ip-or-hostname>&signalingPort=49100
+```
+
+Chrome URL for the direct Vite dev-server path:
+
+```text
+http://<brev-public-ip-or-hostname>:8081?server=<brev-public-ip-or-hostname>&signalingPort=49100
+```
+
+## 1. One-Time Mac Setup
+
+Install VSCode and the Remote - SSH extension on the Mac. Keep this local clone at:
+
+```bash
+cd /Users/leonardyoon/workspace/dsx-leo
+```
+
+After this fork is pushed, the server clone URL is:
+
+```bash
+git clone https://github.com/leonyoon-3dai/dsx-leo.git
+```
+
+Optional local remote check:
+
+```bash
+git remote -v
+```
+
+## 2. Create A Fresh Brev L40S Ubuntu Server
+
+Use an NVIDIA Brev instance with an L40S GPU and Ubuntu 22.04 or 24.04. Save the SSH information Brev provides, for example:
+
+```text
+Host brev-dsx
+  HostName <brev-hostname-or-ip>
+  User ubuntu
+  IdentityFile ~/.ssh/<brev-key>
+```
+
+Add that block to `~/.ssh/config` on the Mac, then connect from VSCode with `Remote-SSH: Connect to Host...` and choose `brev-dsx`.
+
+From the VSCode remote terminal on the Brev server:
+
+```bash
+nvidia-smi
+```
+
+You should see the L40S GPU before continuing.
+
+## 3. Clone This Fork On The Brev Server
+
+Because Brev storage is fresh each run, clone the repo every time you create a new server:
+
+```bash
+cd ~
+git clone https://github.com/leonyoon-3dai/dsx-leo.git
+cd dsx-leo
+```
+
+If you are testing before this fork has been pushed, clone the upstream repository instead and then add this fork remote after it exists.
+
+## 4. Bootstrap Ubuntu Automatically
+
+Run the included bootstrap script on the Brev server:
+
+```bash
+cd ~/dsx-leo
+./scripts/brev_bootstrap_ubuntu.sh
+```
+
+The script installs or configures:
+
+- `git`, `git-lfs`, build tools, and base packages
+- Node.js 20
+- Docker Engine and Docker Compose plugin
+- NVIDIA Container Toolkit for GPU containers
+- Git submodules
+- GPU visibility check with `nvidia-smi`
+
+If the script adds your user to the `docker` group, reconnect the VSCode SSH session or run:
+
+```bash
+newgrp docker
+```
+
+Then verify Docker can see the GPU:
+
+```bash
+docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi
+```
+
+If that image tag is unavailable on a future date, use a current CUDA Ubuntu base image from NVIDIA NGC or Docker Hub.
+
+## 5. DSX Content Pack / USD Scene Data
+
+The DSX scene dataset is not stored in this Git repo. Download the DSX Content Pack from NVIDIA NGC:
+
+```text
+https://catalog.ngc.nvidia.com/orgs/nvidia/teams/omniverse/resources/dsx_dataset
+```
+
+On every fresh Brev server, place the extracted content at:
+
+```text
+/data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
+```
+
+Recommended server commands after downloading or uploading the archive:
+
+```bash
+sudo mkdir -p /data/dsx
+sudo chown -R "$USER:$USER" /data/dsx
+# Extract the content pack so this file exists:
+ls /data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
+```
+
+The Docker Compose file mounts `/data/dsx` into the Kit container as `/app/assets` and sets:
+
+```bash
+USD_URL=/app/assets/DSX_BP/Assembly/DSX_Main_BP.usda
+```
+
+You can override the host asset directory if needed:
+
+```bash
+export DSX_ASSETS_DIR=/another/path/to/dsx
+```
+
+## 6. Start DSX On The Brev Server
+
+Use Docker Compose for repeatable fresh-server runs:
+
+```bash
+cd ~/dsx-leo
+export DSX_ASSETS_DIR=/data/dsx
+export USD_URL=/app/assets/DSX_BP/Assembly/DSX_Main_BP.usda
+docker compose up --build
+```
+
+First launch can take a long time because it downloads Kit dependencies, initializes submodules, builds Kit CAE dependencies, and compiles shaders. Watch for the web service and Kit service to stay running.
+
+To run in the background:
+
+```bash
+docker compose up --build -d
+docker compose logs -f
+```
+
+To stop:
+
+```bash
+docker compose down
+```
+
+The compose path exposes the web frontend on port `8080`. Open this from Mac Chrome:
+
+```text
+http://<brev-public-ip-or-hostname>:8080?server=<brev-public-ip-or-hostname>&signalingPort=49100
+```
+
+Do not use `server=localhost` from the Mac browser unless the Kit app is also running on the Mac. From Mac Chrome, `localhost` means the MacBook, not the Brev server.
+
+## 7. Direct Development Mode Without Docker
+
+Use this mode when actively changing frontend or Kit code and you want faster iteration from VSCode remote terminals.
+
+Terminal 1 on Brev:
+
+```bash
+cd ~/dsx-leo
+export USD_URL=/data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
+./run_streaming.sh
+```
+
+Terminal 2 on Brev:
+
+```bash
+cd ~/dsx-leo
+./run_web.sh
+```
+
+The direct Vite frontend uses port `8081` according to `web/vite.config.ts`. Open from Mac Chrome:
+
+```text
+http://<brev-public-ip-or-hostname>:8081?server=<brev-public-ip-or-hostname>&signalingPort=49100
+```
+
+## 8. Optional AI Agent API
+
+The 3D viewer and configurator can run without an NVIDIA API key. The AI chat agent needs `NVIDIA_API_KEY`.
+
+On the Brev server:
+
+```bash
+export NVIDIA_API_KEY="nvapi-..."
+export DSX_AGENT_PORT=8012
+```
+
+For Docker Compose, add the key to the shell before `docker compose up` or extend `compose.yml` with the environment variable under the `kit` service.
+
+## 9. Troubleshooting Checklist
+
+Check GPU:
+
+```bash
+nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi
+```
+
+Check listening ports on the Brev server:
+
+```bash
+ss -lntup | grep -E ':(8080|8081|49100|8111|8012)\b'
+```
+
+Check Docker logs:
+
+```bash
+docker compose logs -f kit
+docker compose logs -f web
+```
+
+Check the USD path:
+
+```bash
+ls -lh /data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
+```
+
+If the web page loads but streaming does not connect, re-check the Brev firewall/security settings for TCP and UDP ranges `47995-48012` and `49000-49007`, plus TCP `49100`.
+
+If the page is opened through VSCode forwarded port `8080`, still set the `server` query parameter to the Brev public host unless all streaming ports are also reachable through a supported tunnel:
+
+```text
+http://localhost:8080?server=<brev-public-ip-or-hostname>&signalingPort=49100
+```
+
+## 10. Fresh Brev Server Runbook
+
+Every new Brev session:
+
+```bash
+cd ~
+git clone https://github.com/leonyoon-3dai/dsx-leo.git
+cd dsx-leo
+./scripts/brev_bootstrap_ubuntu.sh
+
+sudo mkdir -p /data/dsx
+sudo chown -R "$USER:$USER" /data/dsx
+# Download/extract or upload DSX Content Pack to /data/dsx here.
+ls /data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
+
+export DSX_ASSETS_DIR=/data/dsx
+export USD_URL=/app/assets/DSX_BP/Assembly/DSX_Main_BP.usda
+docker compose up --build
+```
+
+Then open from Mac Chrome:
+
+```text
+http://<brev-public-ip-or-hostname>:8080?server=<brev-public-ip-or-hostname>&signalingPort=49100
+```
+
+---
+
 # NVIDIA Omniverse DSX Blueprint for AI Factory Digital Twins
 
 #### Windows Explorer's native zip archiver may fail on deeply nested archives due to path length limitations. Use a third-party tool like 7-Zip to extract the content pack successfully.

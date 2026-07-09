@@ -6,7 +6,7 @@
 #   docker compose down      # Stop containers
 #
 # Access:
-#   Web UI: http://localhost:8080?server=localhost
+#   Web UI: http://localhost:8080?server=localhost&signalingPort=49100
 #   Kit signaling: localhost:49100
 
 services:
@@ -25,9 +25,9 @@ services:
       - "49000-49007:49000-49007/tcp"
       - "47995-48012:47995-48012/udp"
       - "49000-49007:49000-49007/udp"
-    entrypoint: ["./scripts/run_streaming.sh"]
+    entrypoint: ["./run_streaming.sh"]
     environment:
-      USD_URL: "${USD_URL:-/app/assets/main/main.usda}"
+      USD_URL: "${USD_URL:-/app/assets/DSX_BP/Assembly/DSX_Main_BP.usda}"
     deploy:
       resources:
         reservations:
@@ -36,6 +36,7 @@ services:
               device_ids: ["0"]
               capabilities: [gpu]
     volumes:
+      - "${DSX_ASSETS_DIR:-/data/dsx}:/app/assets:ro"
       - "ov-cache:/home/ubuntu/.cache/ov"
       - "ov-local-share:/home/ubuntu/.local/share/ov/"
 

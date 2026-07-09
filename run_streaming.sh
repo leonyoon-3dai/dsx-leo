@@ -45,7 +45,13 @@ if [ -f "$WIDGET_TOML" ]; then
     sed -i 's/"omni.ai.langchain.widget.core" = { version = "3.0.0" }/"omni.ai.langchain.widget.core" = { version = "3.0.0", optional = true }/' "$WIDGET_TOML"
 fi
 
+LAUNCH_ARGS=("--no-window")
+
+if [ -n "${USD_URL:-}" ]; then
+    LAUNCH_ARGS+=("--/app/auto_load_usd=${USD_URL}")
+fi
+
 # Run the streaming version with no window
 ./repo.sh launch dsx_streaming.kit -- \
-    --no-window \
+    "${LAUNCH_ARGS[@]}" \
     "$@"
