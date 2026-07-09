@@ -321,7 +321,10 @@ if ! command -v ngc >/dev/null 2>&1; then
   rm -rf /tmp/ngccli /tmp/ngccli_linux.zip
   curl -L -o /tmp/ngccli_linux.zip https://ngc.nvidia.com/downloads/ngccli_linux.zip
   unzip -q /tmp/ngccli_linux.zip -d /tmp/ngccli
-  sudo install /tmp/ngccli/ngc-cli/ngc /usr/local/bin/ngc
+  sudo rm -rf /opt/ngc-cli
+  sudo install -d /opt/ngc-cli
+  sudo cp -a /tmp/ngccli/ngc-cli/. /opt/ngc-cli/
+  sudo ln -sf /opt/ngc-cli/ngc /usr/local/bin/ngc
 fi
 ngc --version
 
