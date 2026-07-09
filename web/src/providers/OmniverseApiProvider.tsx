@@ -17,7 +17,6 @@ import {
 import { useOVDSXAppConfig, OVDSXStreamConfig } from "@/context/OVDSXAppContext";
 import {
   DirectConfig,
-  eAction,
   eStatus,
   StreamEvent,
 } from "@nvidia/omniverse-webrtc-streaming-library";
@@ -117,7 +116,10 @@ function createOmniverseApi(
     onTerminate: onStreamTerminate,
     nativeTouchEvents: true,
     authenticate: false,
-    maxReconnects: 20,
+    fitStreamResolution: false,
+    connectivityTimeout: 10000,
+    reconnectDelay: 3000,
+    maxReconnects: 5,
   };
 
   console.log("[OmniverseAPI] Connecting with config:", {
@@ -160,11 +162,9 @@ export const OmniverseApiProvider = ({
   const [api, setApi] = useState<OmniverseAPI | undefined>(undefined);
   const [status, setStatus] = useState(OmniverseStreamStatus.waiting);
 
-  // Handle stream status changes
+  // Handle stream status changes. SDK 5.17 can report connection progress with
+  // action values other than `start`, so status is the authoritative field.
   const handleStreamStatusChange = useCallback((msg: StreamEvent) => {
-    if (msg.action !== eAction.start) {
-      return;
-    }
     let newStatus = OmniverseStreamStatus.waiting;
     switch (msg.status) {
       case eStatus.inProgress: {
@@ -182,6 +182,11 @@ export const OmniverseApiProvider = ({
       default:
         return;
     }
+    console.info("[OmniverseAPI] status:", {
+      action: msg.action,
+      status: msg.status,
+      info: msg.info,
+    });
     setStatus(newStatus);
     onStatusChange?.(newStatus);
   }, [onStatusChange]);
@@ -195,6 +200,20 @@ export const OmniverseApiProvider = ({
     defaultOnStreamUpdate(msg);
     handleStreamStatusChange(msg);
   }, [handleStreamStatusChange]);
+
+  const onStreamStop: StreamHandlerCallback = useCallback((msg) => {
+    defaultOnStreamStop(msg);
+    console.warn("[OmniverseAPI] stream stopped:", msg);
+    setStatus(OmniverseStreamStatus.error);
+    onStatusChange?.(OmniverseStreamStatus.error);
+  }, [onStatusChange]);
+
+  const onStreamTerminate: StreamHandlerCallback = useCallback((msg) => {
+    defaultOnStreamTerminate(msg);
+    console.warn("[OmniverseAPI] stream terminated:", msg);
+    setStatus(OmniverseStreamStatus.error);
+    onStatusChange?.(OmniverseStreamStatus.error);
+  }, [onStatusChange]);
 
   useEffect(() => {
     // Skip if already initialized
@@ -216,13 +235,16 @@ export const OmniverseApiProvider = ({
       onStreamStart,
       onStreamUpdate,
       defaultOnStreamCustomEvent,
-      defaultOnStreamStop,
-      defaultOnStreamTerminate,
+      onStreamStop,
+      onStreamTerminate,
       stream
     );
     setApi(newApi);
 
-  }, [onStreamStart, onStreamUpdate, stream]);
+    return () => {
+      newApi.disconnect();
+    };
+  }, [onStreamStart, onStreamUpdate, onStreamStop, onStreamTerminate, stream]);
 
   return (
     <OmniverseApiContext.Provider value={{ api, status }}>

@@ -12,6 +12,8 @@
 import {
   AppStreamer,
   DirectConfig,
+  eAction,
+  eStatus,
   StreamEvent,
   StreamType,
 } from "@nvidia/omniverse-webrtc-streaming-library";
@@ -94,9 +96,21 @@ export class OmniverseAPI {
     })
       .then((result: StreamEvent) => {
         console.info("[OmniverseAPI] Connected:", result);
+        streamConfig.onStart?.({
+          ...result,
+          action: result.action ?? eAction.start,
+          status: result.status ?? eStatus.success,
+          info: result.info ?? "Connected",
+        });
       })
       .catch((error: StreamEvent) => {
         console.error("[OmniverseAPI] Connection error:", error);
+        streamConfig.onStart?.({
+          ...error,
+          action: error.action ?? eAction.start,
+          status: error.status ?? eStatus.error,
+          info: error.info ?? "Connection error",
+        });
       });
   }
 

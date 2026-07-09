@@ -77,7 +77,17 @@ echo "  codex"
 
 ## 3. Fresh Brev Server Runbook
 
-This block was tested in this session. It logs setup output to `~/dsx-setup-run.log`, downloads and prepares the DSX content pack, starts Kit in the background with logs at `~/dsx-kit-streaming.log`, then starts the web frontend on port `8081`.
+This block was tested in this session. It logs setup output to `~/dsx-setup-run.log`, downloads and prepares the DSX content pack, starts Kit in the background with startup logs at `~/dsx-kit-streaming.log`, then starts the web frontend on port `8081`.
+
+The current runbook also includes the fixes verified in this session:
+
+- Installs `libglu1-mesa`, required by Kit MDL/RTX libraries (`libGLU.so.1`).
+- Uses public PyPI if the Brev pip cache returns license/payment errors.
+- Installs the full NGC CLI directory under `/opt/ngc-cli`.
+- Starts local Kit/WebRTC directly with `run_streaming.sh` and `run_web.sh`.
+- Uses a URL with `?server=<Brev IP>&signalingPort=49100`, so Mac Chrome connects to the Brev Kit server instead of local Mac `localhost`.
+- The streaming app disables the built-in `omni.kit.viewport.ready` loading overlay, which caused the blue RTX loading spinner to remain visible even after the scene appeared.
+- The web client treats SDK stream `status` as authoritative, so a connected stream clears the loading UI even when SDK `action` is not exactly `start`.
 
 The DSX Content Pack is large, about 33GB compressed. Make sure the Brev disk has enough free space before running.
 
@@ -115,7 +125,7 @@ sudo chown -R "$USER:$USER" "$DSX_ASSETS_DIR_HOST"
 
 echo "3/10 Installing base packages needed before clone/download"
 sudo apt-get update
-sudo apt-get install -y curl unzip rsync git git-lfs ca-certificates
+sudo apt-get install -y curl unzip rsync git git-lfs ca-certificates libglu1-mesa
 git lfs install
 
 echo "3b/10 Using public PyPI for Kit dependency builds"
@@ -192,6 +202,7 @@ KIT_PID="$!"
 echo "Kit PID: $KIT_PID"
 echo "Kit log: $KIT_LOG"
 echo "Follow Kit startup with: tail -f $KIT_LOG"
+echo "Kit internal logs: ~/.nvidia-omniverse/logs/Kit/DSX\\ Streaming/2.0/"
 
 echo "10/10 Starting web frontend"
 echo "Open this from Mac Chrome after the Vite server prints that it is ready:"
@@ -210,8 +221,22 @@ Useful checks:
 ```bash
 tail -f ~/dsx-setup-run.log
 tail -f ~/dsx-kit-streaming.log
+ls -lt ~/.nvidia-omniverse/logs/Kit/DSX\ Streaming/2.0/kit_*.log | head
 ls -lh /data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
 ss -lntup | grep -E ':(8081|49100|8111|8012)\b'
+```
+
+If the web UI loads but the stream does not connect, check that the browser URL includes the Brev host twice:
+
+```text
+http://<brev-public-ip-or-hostname>:8081?server=<brev-public-ip-or-hostname>&signalingPort=49100
+```
+
+If the Kit process starts but no rendered frames appear, search the latest Kit internal log:
+
+```bash
+LATEST_KIT_LOG="$(ls -t ~/.nvidia-omniverse/logs/Kit/DSX\ Streaming/2.0/kit_*.log | head -1)"
+grep -E 'libGLU|Failed to load MDL|HydraEngine rtx failed|app ready|livestream' "$LATEST_KIT_LOG" | tail -80
 ```
 
 Stop DSX:
