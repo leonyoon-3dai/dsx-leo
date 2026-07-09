@@ -1,18 +1,17 @@
-# Leo DSX Development Guide: Mac VSCode + Brev Ubuntu L40S + Mac Chrome
+# Leo DSX Fresh Brev Runbook
 
-This fork is intended for the following workflow:
+This is the tested path for a disposable NVIDIA Brev Ubuntu L40S server:
 
-- Edit code on the MacBook in VSCode.
-- Connect VSCode Remote SSH to a fresh NVIDIA Brev Ubuntu L40S GPU server.
-- Run the Omniverse DSX Kit streaming app and web frontend on the cloud Ubuntu server.
-- Open the frontend from Mac Chrome and connect it to the cloud Kit streaming server.
-- Treat the cloud server as disposable: every new Brev session starts from a clean disk, so setup must be repeatable.
+1. Add your SSH public key.
+2. Install Codex CLI.
+3. Run the DSX one-copy setup/start block.
+4. Optionally enable the AI Agent API.
 
-The recommended fresh-server runtime path is the direct development launcher: `run_streaming.sh` for the Kit streaming server and `run_web.sh` for the web frontend. The Docker Compose files are retained for container work, but the one-copy Brev runbook below uses the direct launch path because it matches the current repository layout.
+The runtime path uses `run_streaming.sh` for the Omniverse Kit streaming server and `run_web.sh` for the Vite web frontend. Docker Compose files remain in the repo for container work, but this runbook intentionally uses direct launch because it matches the current repo layout.
 
-## 0. Ports To Open On The Brev Server
+## Ports To Open
 
-For Mac Chrome to connect to the cloud-hosted frontend and Omniverse WebRTC stream, the server must allow these inbound ports. VSCode SSH port forwarding is useful for editing, but it is not enough for the WebRTC media path because the stream uses TCP and UDP media ports.
+Open these inbound ports on the Brev server before using Mac Chrome:
 
 | Purpose | Protocol | Port(s) |
 | --- | --- | --- |
@@ -24,254 +23,69 @@ For Mac Chrome to connect to the cloud-hosted frontend and Omniverse WebRTC stre
 | Additional WebRTC media | TCP + UDP | `49000-49007` |
 | WebRTC UDP helper | UDP | `1024` |
 
-If Brev gives you a public hostname, use that hostname in the browser URL. If it gives you a public IP, use the IP.
+Use the Brev public IP or hostname in the browser URL. From Mac Chrome, `localhost` means the Mac, not the Brev server.
+
+## 1. Add SSH Key
+
+On the fresh Brev server, paste your Mac `id_rsa.pub` public key into `authorized_keys`:
 
 ```bash
-export DSX_HOST="<brev-public-ip-or-hostname>"
+mkdir -p ~/.ssh
+nano ~/.ssh/authorized_keys
 ```
 
-Chrome URL for the fresh-server runbook:
+Paste the full public key line, then save and exit:
 
 ```text
-http://<brev-public-ip-or-hostname>:8081?server=<brev-public-ip-or-hostname>&signalingPort=49100
+Ctrl+O
+Enter
+Ctrl+X
 ```
 
-## 1. One-Time Mac Setup
-
-Install VSCode and the Remote - SSH extension on the Mac. Keep this local clone at:
+Set SSH permissions:
 
 ```bash
-cd /Users/leonardyoon/workspace/dsx-leo
+chmod 700 ~/.ssh
+chmod 600 ~/.ssh/authorized_keys
 ```
 
-After this fork is pushed, the server clone URL is:
+## 2. Install Codex CLI
+
+Copy and run this block on the Brev server:
 
 ```bash
-git clone https://github.com/leonyoon-3dai/dsx-leo.git
+set -euo pipefail
+
+echo "1/4 Ensuring Node.js and npm are installed"
+if ! command -v node >/dev/null 2>&1 || ! node --version | grep -Eq '^v20\.'; then
+  sudo apt-get update
+  sudo apt-get install -y curl ca-certificates
+  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+  sudo apt-get install -y nodejs
+fi
+
+echo "2/4 Installing Codex CLI with npm"
+sudo npm install -g @openai/codex
+
+echo "3/4 Verifying installation"
+codex --version
+
+echo "4/4 Starting Codex"
+echo "Run this in any repository directory:"
+echo "  codex"
 ```
 
-Optional local remote check:
+## 3. Fresh Brev Server Runbook
 
-```bash
-git remote -v
-```
-
-## 2. Create A Fresh Brev L40S Ubuntu Server
-
-Use an NVIDIA Brev instance with an L40S GPU and Ubuntu 22.04 or 24.04. Save the SSH information Brev provides, for example:
-
-```text
-Host brev-dsx
-  HostName <brev-hostname-or-ip>
-  User ubuntu
-  IdentityFile ~/.ssh/<brev-key>
-```
-
-Add that block to `~/.ssh/config` on the Mac, then connect from VSCode with `Remote-SSH: Connect to Host...` and choose `brev-dsx`.
-
-From the VSCode remote terminal on the Brev server:
-
-```bash
-nvidia-smi
-```
-
-You should see the L40S GPU before continuing.
-
-## 3. Clone This Fork On The Brev Server
-
-Because Brev storage is fresh each run, clone the repo every time you create a new server:
-
-```bash
-cd ~
-git clone https://github.com/leonyoon-3dai/dsx-leo.git
-cd dsx-leo
-```
-
-If you are testing before this fork has been pushed, clone the upstream repository instead and then add this fork remote after it exists.
-
-## 4. Bootstrap Ubuntu Automatically
-
-Run the included bootstrap script on the Brev server:
-
-```bash
-cd ~/dsx-leo
-./scripts/brev_bootstrap_ubuntu.sh
-```
-
-The script installs or configures:
-
-- `git`, `git-lfs`, build tools, and base packages
-- Node.js 20
-- Docker Engine and Docker Compose plugin
-- NVIDIA Container Toolkit for GPU containers
-- Git submodules
-- GPU visibility check with `nvidia-smi`
-
-If the script adds your user to the `docker` group, reconnect the VSCode SSH session or run:
-
-```bash
-newgrp docker
-```
-
-Then verify Docker can see the GPU:
-
-```bash
-docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi
-```
-
-If that image tag is unavailable on a future date, use a current CUDA Ubuntu base image from NVIDIA NGC or Docker Hub.
-
-## 5. DSX Content Pack / USD Scene Data
-
-The DSX scene dataset is not stored in this Git repo. Download the DSX Content Pack from NVIDIA NGC:
-
-```text
-https://catalog.ngc.nvidia.com/orgs/nvidia/teams/omniverse/resources/dsx_dataset
-```
-
-On every fresh Brev server, place the extracted content at:
-
-```text
-/data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
-```
-
-Recommended server commands after downloading or uploading the archive:
-
-```bash
-sudo mkdir -p /data/dsx
-sudo chown -R "$USER:$USER" /data/dsx
-# Extract the content pack so this file exists:
-ls /data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
-```
-
-The direct launch path uses this host path as `USD_URL`:
-
-```bash
-export USD_URL=/data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
-```
-
-You can override the host asset directory by pointing `USD_URL` at a different extracted USD file:
-
-```bash
-export USD_URL=/another/path/to/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
-```
-
-## 6. Start DSX With Direct Launch
-
-Use direct launch for normal Brev runs.
-
-This starts the services in separate terminals:
-
-- Kit streaming server
-- Web frontend on port `8081`
-
-```bash
-cd ~/dsx-leo
-export USD_URL=/data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
-./run_streaming.sh
-```
-
-In a second terminal:
-
-```bash
-cd ~/dsx-leo
-./run_web.sh
-```
-
-Mac Chrome URL:
-
-```text
-http://<brev-public-ip-or-hostname>:8081?server=<brev-public-ip-or-hostname>&signalingPort=49100
-```
-
-Do not use `server=localhost` from the Mac browser unless the Kit app is also running on the Mac. From Mac Chrome, `localhost` means the MacBook, not the Brev server.
-
-## 7. Optional Direct Development Mode Without Docker
-
-Use direct development mode only when changing code and you want separate terminals.
-
-This mode does not use Docker Compose:
-
-- Terminal 1 runs Kit streaming directly.
-- Terminal 2 runs the Vite web frontend directly.
-- The web frontend uses port `8081`.
-
-Terminal 1 on Brev:
-
-```bash
-cd ~/dsx-leo
-export USD_URL=/data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
-./run_streaming.sh
-```
-
-Terminal 2 on Brev:
-
-```bash
-cd ~/dsx-leo
-./run_web.sh
-```
-
-Mac Chrome URL:
-
-```text
-http://<brev-public-ip-or-hostname>:8081?server=<brev-public-ip-or-hostname>&signalingPort=49100
-```
-
-## 8. Optional AI Agent API
-
-The 3D viewer and configurator can run without an NVIDIA API key. The AI chat agent needs `NVIDIA_API_KEY`.
-
-On the Brev server:
-
-```bash
-export NVIDIA_API_KEY="nvapi-..."
-export DSX_AGENT_PORT=8012
-```
-
-For the direct launch path, export `NVIDIA_API_KEY` in the same shell before running `./run_streaming.sh`. In the one-copy runbook, export it before pasting the block.
-
-## 9. Troubleshooting Checklist
-
-Check GPU:
-
-```bash
-nvidia-smi
-docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi
-```
-
-Check listening ports on the Brev server:
-
-```bash
-ss -lntup | grep -E ':(8081|49100|8111|8012)\b'
-```
-
-Check the Kit streaming log from the one-copy runbook:
-
-```bash
-tail -f ~/dsx-kit-streaming.log
-```
-
-Check the USD path:
-
-```bash
-ls -lh /data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
-```
-
-If the web page loads but streaming does not connect, re-check the Brev firewall/security settings for TCP and UDP ranges `47995-48012` and `49000-49007`, plus TCP `49100`.
-
-If the page is opened through a VSCode forwarded port, still set the `server` query parameter to the Brev public host unless all streaming ports are also reachable through a supported tunnel:
-
-```text
-http://localhost:8081?server=<brev-public-ip-or-hostname>&signalingPort=49100
-```
-
-## 10. Fresh Brev Server Runbook
-
-Use this on a fresh Brev server when you want to start with one copy/paste command. It installs the host dependencies, installs the NGC CLI, downloads the DSX Content Pack, prepares `/data/dsx`, starts the Kit streaming server in the background, and starts the web frontend on port `8081`.
+This block was tested in this session. It logs setup output to `~/dsx-setup-run.log`, downloads and prepares the DSX content pack, starts Kit in the background with logs at `~/dsx-kit-streaming.log`, then starts the web frontend on port `8081`.
 
 The DSX Content Pack is large, about 33GB compressed. Make sure the Brev disk has enough free space before running.
 
-If NGC asks for authentication, create an NGC API key and run `export NGC_CLI_API_KEY="..."` before this block, then run the block again.
+If NGC asks for authentication, create an NGC API key and run this before the block:
+
+```bash
+export NGC_CLI_API_KEY="..."
+```
 
 Copy and run this whole block on the Brev server:
 
@@ -385,48 +199,40 @@ echo "http://${BREV_HOST}:8081?server=${BREV_HOST}&signalingPort=49100"
 ./run_web.sh
 ```
 
-When the web service is running, open the printed URL from Mac Chrome. It will look like this:
+When the web server is running, open:
 
 ```text
 http://<brev-public-ip-or-hostname>:8081?server=<brev-public-ip-or-hostname>&signalingPort=49100
 ```
 
-The Kit server runs in the background and writes logs to:
+Useful checks:
 
 ```bash
+tail -f ~/dsx-setup-run.log
 tail -f ~/dsx-kit-streaming.log
+ls -lh /data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
+ss -lntup | grep -E ':(8081|49100|8111|8012)\b'
 ```
 
-To stop both processes:
+Stop DSX:
 
 ```bash
-pkill -f "repo.sh launch dsx_streaming.kit" || true
+pkill -f "repo.sh launch dsx_streaming[.]kit" || true
 pkill -f "vite" || true
 ```
 
-## 11. Install Codex CLI On The Same Ubuntu Server
+## 4. Optional AI Agent API
 
-Use this on the same Ubuntu server when you want to install the Codex CLI with npm in one copy/paste block. It reuses Node.js from step 10 if it is already installed.
+The 3D viewer and configurator can run without an NVIDIA API key. The AI chat agent needs `NVIDIA_API_KEY`.
+
+To enable the AI agent on a fresh run, export the key before running step 3:
 
 ```bash
-set -euo pipefail
-
-echo "1/4 Ensuring Node.js and npm are installed"
-if ! command -v node >/dev/null 2>&1 || ! node --version | grep -Eq '^v20\.'; then
-  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-  sudo apt-get install -y nodejs
-fi
-
-echo "2/4 Installing Codex CLI with npm"
-sudo npm install -g @openai/codex
-
-echo "3/4 Verifying installation"
-codex --version
-
-echo "4/4 Starting Codex"
-echo "Run this in any repository directory:"
-echo "  codex"
+export NVIDIA_API_KEY="nvapi-..."
+export DSX_AGENT_PORT=8012
 ```
+
+If DSX is already running, stop it, export the variables, then run step 3 again. The runbook reuses the downloaded DSX data and repo checkout, so the rerun is much faster.
 
 ---
 
