@@ -304,6 +304,12 @@ sudo apt-get update
 sudo apt-get install -y curl unzip rsync git git-lfs ca-certificates
 git lfs install
 
+echo "3b/10 Using public PyPI for Kit dependency builds"
+if [ -f /etc/pip.conf ] && grep -q "mcache-dsm.massedcompute.com" /etc/pip.conf; then
+  sudo cp /etc/pip.conf /etc/pip.conf.dsx-mcache-backup
+  printf '%s\n' '[global]' 'index-url = https://pypi.org/simple' | sudo tee /etc/pip.conf >/dev/null
+fi
+
 echo "4/10 Cloning or updating repo"
 if [ ! -d "$REPO_DIR/.git" ]; then
   git clone "$REPO_URL" "$REPO_DIR"
