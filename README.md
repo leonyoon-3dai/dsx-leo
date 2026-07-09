@@ -284,13 +284,11 @@ http://localhost:8080?server=<brev-public-ip-or-hostname>&signalingPort=49100
 
 ## 10. Fresh Brev Server Runbook
 
-Use this on a fresh Brev server when you want to start with one copy/paste command.
+Use this on a fresh Brev server when you want to start with one copy/paste command. It installs the NGC CLI, downloads the DSX Content Pack, prepares `/data/dsx`, and starts Docker Compose.
 
-Before running it, the DSX Content Pack must already be extracted or uploaded so this file exists:
+The DSX Content Pack is large, about 33GB compressed. Make sure the Brev disk has enough free space before running.
 
-```text
-/data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
-```
+If NGC asks for authentication, create an NGC API key and run `export NGC_CLI_API_KEY="..."` before this block, then run the block again.
 
 Copy and run this whole block on the Brev server:
 
@@ -299,13 +297,16 @@ set -euo pipefail
 
 REPO_URL="https://github.com/leonyoon-3dai/dsx-leo.git"
 REPO_DIR="$HOME/dsx-leo"
+NGC_RESOURCE="nvidia/omniverse/dsx_dataset:2.1"
+DSX_DOWNLOAD_DIR="$HOME/ngc-dsx-download"
+DSX_ASSETS_DIR_HOST="/data/dsx"
 DSX_USD_HOST="/data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda"
 BREV_HOST="${BREV_HOST:-$(curl -fsS https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')}"
 
-echo "1/6 Checking GPU"
+echo "1/8 Checking GPU"
 nvidia-smi
 
-echo "2/6 Cloning or updating repo"
+echo "2/8 Cloning or updating repo"
 if [ ! -d "$REPO_DIR/.git" ]; then
   git clone "$REPO_URL" "$REPO_DIR"
 else
@@ -314,24 +315,62 @@ fi
 
 cd "$REPO_DIR"
 
-echo "3/6 Bootstrapping Ubuntu, Docker, NVIDIA Container Toolkit, Node.js, and submodules"
+echo "3/8 Bootstrapping Ubuntu, Docker, NVIDIA Container Toolkit, Node.js, and submodules"
 ./scripts/brev_bootstrap_ubuntu.sh
 
-echo "4/6 Checking DSX Content Pack"
-sudo mkdir -p /data/dsx
-sudo chown -R "$USER:$USER" /data/dsx
+echo "4/8 Installing NGC CLI if needed"
+sudo apt-get update
+sudo apt-get install -y curl unzip rsync
+if ! command -v ngc >/dev/null 2>&1; then
+  rm -rf /tmp/ngccli /tmp/ngccli_linux.zip
+  curl -L -o /tmp/ngccli_linux.zip https://ngc.nvidia.com/downloads/ngccli_linux.zip
+  unzip -q /tmp/ngccli_linux.zip -d /tmp/ngccli
+  sudo install /tmp/ngccli/ngc-cli/ngc /usr/local/bin/ngc
+fi
+ngc --version
+
+echo "5/8 Downloading DSX Content Pack from NGC"
+sudo mkdir -p "$DSX_ASSETS_DIR_HOST"
+sudo chown -R "$USER:$USER" "$DSX_ASSETS_DIR_HOST"
 if [ ! -f "$DSX_USD_HOST" ]; then
-  echo "Missing DSX USD file:"
+  mkdir -p "$DSX_DOWNLOAD_DIR"
+  ngc registry resource download-version "$NGC_RESOURCE" --dest "$DSX_DOWNLOAD_DIR"
+fi
+
+echo "6/8 Preparing /data/dsx"
+if [ ! -f "$DSX_USD_HOST" ]; then
+  DSX_USD_FOUND="$(find "$DSX_DOWNLOAD_DIR" -path "*/DSX_BP/Assembly/DSX_Main_BP.usda" -print -quit)"
+  if [ -z "$DSX_USD_FOUND" ]; then
+    ARCHIVE_FOUND="$(find "$DSX_DOWNLOAD_DIR" -type f \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.tgz" \) -print -quit)"
+    if [ -n "$ARCHIVE_FOUND" ]; then
+      case "$ARCHIVE_FOUND" in
+        *.zip) unzip -q -o "$ARCHIVE_FOUND" -d "$DSX_ASSETS_DIR_HOST" ;;
+        *.tar.gz|*.tgz) tar -xzf "$ARCHIVE_FOUND" -C "$DSX_ASSETS_DIR_HOST" ;;
+      esac
+    fi
+  fi
+fi
+
+if [ ! -f "$DSX_USD_HOST" ]; then
+  DSX_USD_FOUND="$(find "$DSX_DOWNLOAD_DIR" "$DSX_ASSETS_DIR_HOST" -path "*/DSX_BP/Assembly/DSX_Main_BP.usda" -print -quit)"
+  if [ -n "$DSX_USD_FOUND" ]; then
+    DSX_ROOT="$(dirname "$(dirname "$(dirname "$DSX_USD_FOUND")")")"
+    rsync -a "$DSX_ROOT"/ "$DSX_ASSETS_DIR_HOST"/
+  fi
+fi
+
+if [ ! -f "$DSX_USD_HOST" ]; then
+  echo "DSX Content Pack download finished, but the expected USD was not found:"
   echo "  $DSX_USD_HOST"
-  echo ""
-  echo "Download/extract or upload the DSX Content Pack to /data/dsx, then run this block again."
+  echo "Check downloaded files under:"
+  echo "  $DSX_DOWNLOAD_DIR"
   exit 1
 fi
 
-echo "5/6 Chrome URL from MacBook"
+echo "7/8 Chrome URL from MacBook"
 echo "http://${BREV_HOST}:8080?server=${BREV_HOST}&signalingPort=49100"
 
-echo "6/6 Starting DSX with Docker Compose"
+echo "8/8 Starting DSX with Docker Compose"
 export DSX_ASSETS_DIR=/data/dsx
 export USD_URL=/app/assets/DSX_BP/Assembly/DSX_Main_BP.usda
 
