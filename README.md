@@ -207,6 +207,8 @@ echo "Kit internal logs: ~/.nvidia-omniverse/logs/Kit/DSX\\ Streaming/2.0/"
 echo "10/10 Starting web frontend"
 echo "Open this from Mac Chrome after the Vite server prints that it is ready:"
 echo "http://${BREV_HOST}:8081?server=${BREV_HOST}&signalingPort=49100"
+echo "If using VS Code port forwarding for 8081, open:"
+echo "http://localhost:8081?server=${BREV_HOST}&signalingPort=49100"
 ./run_web.sh
 ```
 
@@ -214,6 +216,12 @@ When the web server is running, open:
 
 ```text
 http://<brev-public-ip-or-hostname>:8081?server=<brev-public-ip-or-hostname>&signalingPort=49100
+```
+
+If VS Code forwards the Vite web port `8081`, open this from Mac Chrome instead:
+
+```text
+http://localhost:8081?server=<brev-public-ip-or-hostname>&signalingPort=49100
 ```
 
 Useful checks:
@@ -230,6 +238,12 @@ If the web UI loads but the stream does not connect, check that the browser URL 
 
 ```text
 http://<brev-public-ip-or-hostname>:8081?server=<brev-public-ip-or-hostname>&signalingPort=49100
+```
+
+For VS Code port forwarding, only the web host becomes `localhost`; the `server=` value must still be the Brev public IP or hostname:
+
+```text
+http://localhost:8081?server=<brev-public-ip-or-hostname>&signalingPort=49100
 ```
 
 If the Kit process starts but no rendered frames appear, search the latest Kit internal log:
