@@ -165,9 +165,12 @@ export DSX_ASSETS_DIR=/another/path/to/dsx
 
 ## 6. Start DSX With Docker Compose
 
-Use this path for normal Brev runs. Docker Compose is the recommended option because it keeps the Kit streaming server and web frontend startup consistent after every fresh server rebuild.
+Use Docker Compose for normal Brev runs.
 
-Run in the foreground when you want to watch first-start logs:
+This starts both services together:
+
+- Kit streaming server
+- Web frontend on port `8080`
 
 ```bash
 cd ~/dsx-leo
@@ -176,16 +179,7 @@ export USD_URL=/app/assets/DSX_BP/Assembly/DSX_Main_BP.usda
 docker compose up --build
 ```
 
-First launch can take a long time because it downloads Kit dependencies, initializes submodules, builds Kit CAE dependencies, and compiles shaders. Watch for the web service and Kit service to stay running.
-
-Compose-specific paths:
-
-- `DSX_ASSETS_DIR` is the host directory mounted into the Kit container.
-- `USD_URL` is the path inside the Kit container, so the default content pack path is `/app/assets/DSX_BP/Assembly/DSX_Main_BP.usda`.
-- The web frontend is exposed on TCP `8080`.
-- Kit WebRTC signaling is exposed on TCP `49100`; media also needs the TCP/UDP ranges listed in section 0.
-
-Optional background mode:
+Background option:
 
 ```bash
 cd ~/dsx-leo
@@ -200,7 +194,7 @@ cd ~/dsx-leo
 docker compose down
 ```
 
-Open this from Mac Chrome:
+Mac Chrome URL:
 
 ```text
 http://<brev-public-ip-or-hostname>:8080?server=<brev-public-ip-or-hostname>&signalingPort=49100
@@ -210,13 +204,13 @@ Do not use `server=localhost` from the Mac browser unless the Kit app is also ru
 
 ## 7. Optional Direct Development Mode Without Docker
 
-Use this mode only when actively changing frontend or Kit code and you want separate terminals for faster iteration. This is not the fresh-server default path; use section 6 for normal repeatable runs.
+Use direct development mode only when changing code and you want separate terminals.
 
-Direct-mode path differences:
+This mode does not use Docker Compose:
 
-- The Kit app reads `USD_URL` from the host filesystem, so use `/data/dsx/...`, not `/app/assets/...`.
-- The Vite dev frontend uses TCP `8081`.
-- You must keep both terminals running.
+- Terminal 1 runs Kit streaming directly.
+- Terminal 2 runs the Vite web frontend directly.
+- The web frontend uses port `8081`.
 
 Terminal 1 on Brev:
 
@@ -233,7 +227,7 @@ cd ~/dsx-leo
 ./run_web.sh
 ```
 
-Open this from Mac Chrome:
+Mac Chrome URL:
 
 ```text
 http://<brev-public-ip-or-hostname>:8081?server=<brev-public-ip-or-hostname>&signalingPort=49100
@@ -290,68 +284,69 @@ http://localhost:8080?server=<brev-public-ip-or-hostname>&signalingPort=49100
 
 ## 10. Fresh Brev Server Runbook
 
-Use this runbook when Brev gives you a brand-new Ubuntu L40S machine with an empty disk. It intentionally follows the recommended Docker Compose path from section 6. Use section 7 later only if you switch into direct development mode.
+Use this on a fresh Brev server when you want to start with one copy/paste command.
 
-Step 1: SSH into the Brev server from VSCode Remote SSH, then verify the GPU:
+Before running it, the DSX Content Pack must already be extracted or uploaded so this file exists:
+
+```text
+/data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
+```
+
+Copy and run this whole block on the Brev server:
 
 ```bash
+set -euo pipefail
+
+REPO_URL="https://github.com/leonyoon-3dai/dsx-leo.git"
+REPO_DIR="$HOME/dsx-leo"
+DSX_USD_HOST="/data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda"
+BREV_HOST="${BREV_HOST:-$(curl -fsS https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')}"
+
+echo "1/6 Checking GPU"
 nvidia-smi
-```
 
-Step 2: clone this fork:
+echo "2/6 Cloning or updating repo"
+if [ ! -d "$REPO_DIR/.git" ]; then
+  git clone "$REPO_URL" "$REPO_DIR"
+else
+  git -C "$REPO_DIR" pull --ff-only
+fi
 
-```bash
-cd ~
-git clone https://github.com/leonyoon-3dai/dsx-leo.git
-cd dsx-leo
-```
+cd "$REPO_DIR"
 
-Step 3: bootstrap Ubuntu, Docker, NVIDIA Container Toolkit, Node.js, and submodules:
-
-```bash
+echo "3/6 Bootstrapping Ubuntu, Docker, NVIDIA Container Toolkit, Node.js, and submodules"
 ./scripts/brev_bootstrap_ubuntu.sh
-```
 
-If the bootstrap script changes Docker group membership, reconnect the VSCode SSH session or run:
-
-```bash
-newgrp docker
-```
-
-Step 4: prepare the DSX content pack location:
-
-```bash
+echo "4/6 Checking DSX Content Pack"
 sudo mkdir -p /data/dsx
 sudo chown -R "$USER:$USER" /data/dsx
-```
+if [ ! -f "$DSX_USD_HOST" ]; then
+  echo "Missing DSX USD file:"
+  echo "  $DSX_USD_HOST"
+  echo ""
+  echo "Download/extract or upload the DSX Content Pack to /data/dsx, then run this block again."
+  exit 1
+fi
 
-Download, extract, or upload the DSX Content Pack so the main USD file exists at this host path:
+echo "5/6 Chrome URL from MacBook"
+echo "http://${BREV_HOST}:8080?server=${BREV_HOST}&signalingPort=49100"
 
-```bash
-ls /data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
-```
-
-Step 5: start DSX with Docker Compose:
-
-```bash
-cd ~/dsx-leo
+echo "6/6 Starting DSX with Docker Compose"
 export DSX_ASSETS_DIR=/data/dsx
 export USD_URL=/app/assets/DSX_BP/Assembly/DSX_Main_BP.usda
-docker compose up --build
+
+if docker ps >/dev/null 2>&1; then
+  docker compose up --build
+else
+  sudo --preserve-env=DSX_ASSETS_DIR,USD_URL docker compose up --build
+fi
 ```
 
-Step 6: open the Docker Compose frontend from Mac Chrome:
+When the web service is running, open the printed URL from Mac Chrome. It will look like this:
 
 ```text
 http://<brev-public-ip-or-hostname>:8080?server=<brev-public-ip-or-hostname>&signalingPort=49100
 ```
-
-Fresh-run options after the first successful launch:
-
-- Run in background: `docker compose up --build -d`
-- Watch logs: `docker compose logs -f`
-- Stop services: `docker compose down`
-- Switch to direct development mode: stop Compose first, then follow section 7.
 
 ---
 
