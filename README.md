@@ -8,7 +8,7 @@ This fork is intended for the following workflow:
 - Open the frontend from Mac Chrome and connect it to the cloud Kit streaming server.
 - Treat the cloud server as disposable: every new Brev session starts from a clean disk, so setup must be repeatable.
 
-The recommended runtime path for the cloud server is Docker Compose. It keeps the Kit app and web frontend startup consistent across fresh Brev machines.
+The recommended fresh-server runtime path is the direct development launcher: `run_streaming.sh` for the Kit streaming server and `run_web.sh` for the web frontend. The Docker Compose files are retained for container work, but the one-copy Brev runbook below uses the direct launch path because it matches the current repository layout.
 
 ## 0. Ports To Open On The Brev Server
 
@@ -16,8 +16,7 @@ For Mac Chrome to connect to the cloud-hosted frontend and Omniverse WebRTC stre
 
 | Purpose | Protocol | Port(s) |
 | --- | --- | --- |
-| Web frontend, Docker Compose | TCP | `8080` |
-| Web frontend, direct Vite dev server | TCP | `8081` |
+| Web frontend, Vite dev server | TCP | `8081` |
 | Kit WebRTC signaling | TCP | `49100` |
 | Kit control / health | TCP | `8111` |
 | DSX AI agent API | TCP | `8012` |
@@ -31,13 +30,7 @@ If Brev gives you a public hostname, use that hostname in the browser URL. If it
 export DSX_HOST="<brev-public-ip-or-hostname>"
 ```
 
-Chrome URL for the Docker Compose path:
-
-```text
-http://<brev-public-ip-or-hostname>:8080?server=<brev-public-ip-or-hostname>&signalingPort=49100
-```
-
-Chrome URL for the direct Vite dev-server path:
+Chrome URL for the fresh-server runbook:
 
 ```text
 http://<brev-public-ip-or-hostname>:8081?server=<brev-public-ip-or-hostname>&signalingPort=49100
@@ -151,53 +144,44 @@ sudo chown -R "$USER:$USER" /data/dsx
 ls /data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
 ```
 
-The Docker Compose file mounts `/data/dsx` into the Kit container as `/app/assets` and sets:
+The direct launch path uses this host path as `USD_URL`:
 
 ```bash
-USD_URL=/app/assets/DSX_BP/Assembly/DSX_Main_BP.usda
+export USD_URL=/data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
 ```
 
-You can override the host asset directory if needed:
+You can override the host asset directory by pointing `USD_URL` at a different extracted USD file:
 
 ```bash
-export DSX_ASSETS_DIR=/another/path/to/dsx
+export USD_URL=/another/path/to/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
 ```
 
-## 6. Start DSX With Docker Compose
+## 6. Start DSX With Direct Launch
 
-Use Docker Compose for normal Brev runs.
+Use direct launch for normal Brev runs.
 
-This starts both services together:
+This starts the services in separate terminals:
 
 - Kit streaming server
-- Web frontend on port `8080`
+- Web frontend on port `8081`
 
 ```bash
 cd ~/dsx-leo
-export DSX_ASSETS_DIR=/data/dsx
-export USD_URL=/app/assets/DSX_BP/Assembly/DSX_Main_BP.usda
-docker compose up --build
+export USD_URL=/data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
+./run_streaming.sh
 ```
 
-Background option:
+In a second terminal:
 
 ```bash
 cd ~/dsx-leo
-docker compose up --build -d
-docker compose logs -f
-```
-
-Stop the Compose stack:
-
-```bash
-cd ~/dsx-leo
-docker compose down
+./run_web.sh
 ```
 
 Mac Chrome URL:
 
 ```text
-http://<brev-public-ip-or-hostname>:8080?server=<brev-public-ip-or-hostname>&signalingPort=49100
+http://<brev-public-ip-or-hostname>:8081?server=<brev-public-ip-or-hostname>&signalingPort=49100
 ```
 
 Do not use `server=localhost` from the Mac browser unless the Kit app is also running on the Mac. From Mac Chrome, `localhost` means the MacBook, not the Brev server.
@@ -244,7 +228,7 @@ export NVIDIA_API_KEY="nvapi-..."
 export DSX_AGENT_PORT=8012
 ```
 
-For Docker Compose, add the key to the shell before `docker compose up` or extend `compose.yml` with the environment variable under the `kit` service.
+For the direct launch path, export `NVIDIA_API_KEY` in the same shell before running `./run_streaming.sh`. In the one-copy runbook, export it before pasting the block.
 
 ## 9. Troubleshooting Checklist
 
@@ -258,14 +242,13 @@ docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi
 Check listening ports on the Brev server:
 
 ```bash
-ss -lntup | grep -E ':(8080|8081|49100|8111|8012)\b'
+ss -lntup | grep -E ':(8081|49100|8111|8012)\b'
 ```
 
-Check Docker logs:
+Check the Kit streaming log from the one-copy runbook:
 
 ```bash
-docker compose logs -f kit
-docker compose logs -f web
+tail -f ~/dsx-kit-streaming.log
 ```
 
 Check the USD path:
@@ -276,15 +259,15 @@ ls -lh /data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
 
 If the web page loads but streaming does not connect, re-check the Brev firewall/security settings for TCP and UDP ranges `47995-48012` and `49000-49007`, plus TCP `49100`.
 
-If the page is opened through VSCode forwarded port `8080`, still set the `server` query parameter to the Brev public host unless all streaming ports are also reachable through a supported tunnel:
+If the page is opened through a VSCode forwarded port, still set the `server` query parameter to the Brev public host unless all streaming ports are also reachable through a supported tunnel:
 
 ```text
-http://localhost:8080?server=<brev-public-ip-or-hostname>&signalingPort=49100
+http://localhost:8081?server=<brev-public-ip-or-hostname>&signalingPort=49100
 ```
 
 ## 10. Fresh Brev Server Runbook
 
-Use this on a fresh Brev server when you want to start with one copy/paste command. It installs the NGC CLI, downloads the DSX Content Pack, prepares `/data/dsx`, and starts Docker Compose.
+Use this on a fresh Brev server when you want to start with one copy/paste command. It installs the host dependencies, installs the NGC CLI, downloads the DSX Content Pack, prepares `/data/dsx`, starts the Kit streaming server in the background, and starts the web frontend on port `8081`.
 
 The DSX Content Pack is large, about 33GB compressed. Make sure the Brev disk has enough free space before running.
 
@@ -301,16 +284,27 @@ NGC_RESOURCE="nvidia/omniverse/dsx_dataset:2.1"
 DSX_DOWNLOAD_DIR="$HOME/ngc-dsx-download"
 DSX_ASSETS_DIR_HOST="/data/dsx"
 DSX_USD_HOST="/data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda"
-BREV_HOST="${BREV_HOST:-$(curl -fsS https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')}"
+KIT_LOG="$HOME/dsx-kit-streaming.log"
+SETUP_LOG="$HOME/dsx-setup-run.log"
+BREV_HOST="${BREV_HOST:-$(curl -fsS https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}' || hostname)}"
 
-echo "1/9 Checking GPU"
+mkdir -p "$(dirname "$SETUP_LOG")"
+exec > >(tee -a "$SETUP_LOG") 2>&1
+echo "Setup log: $SETUP_LOG"
+
+echo "1/10 Checking GPU"
 nvidia-smi
 
-echo "2/9 Preparing /data/dsx"
+echo "2/10 Preparing /data/dsx"
 sudo mkdir -p "$DSX_ASSETS_DIR_HOST"
 sudo chown -R "$USER:$USER" "$DSX_ASSETS_DIR_HOST"
 
-echo "3/9 Cloning or updating repo"
+echo "3/10 Installing base packages needed before clone/download"
+sudo apt-get update
+sudo apt-get install -y curl unzip rsync git git-lfs ca-certificates
+git lfs install
+
+echo "4/10 Cloning or updating repo"
 if [ ! -d "$REPO_DIR/.git" ]; then
   git clone "$REPO_URL" "$REPO_DIR"
 else
@@ -319,12 +313,10 @@ fi
 
 cd "$REPO_DIR"
 
-echo "4/9 Bootstrapping Ubuntu, Docker, NVIDIA Container Toolkit, Node.js, and submodules"
+echo "5/10 Bootstrapping Ubuntu, Docker, NVIDIA Container Toolkit, Node.js, and submodules"
 ./scripts/brev_bootstrap_ubuntu.sh
 
-echo "5/9 Installing NGC CLI if needed"
-sudo apt-get update
-sudo apt-get install -y curl unzip rsync
+echo "6/10 Installing NGC CLI if needed"
 if ! command -v ngc >/dev/null 2>&1; then
   rm -rf /tmp/ngccli /tmp/ngccli_linux.zip
   curl -L -o /tmp/ngccli_linux.zip https://ngc.nvidia.com/downloads/ngccli_linux.zip
@@ -333,13 +325,13 @@ if ! command -v ngc >/dev/null 2>&1; then
 fi
 ngc --version
 
-echo "6/9 Downloading DSX Content Pack from NGC"
+echo "7/10 Downloading DSX Content Pack from NGC"
 if [ ! -f "$DSX_USD_HOST" ]; then
   mkdir -p "$DSX_DOWNLOAD_DIR"
   ngc registry resource download-version "$NGC_RESOURCE" --dest "$DSX_DOWNLOAD_DIR"
 fi
 
-echo "7/9 Preparing downloaded files in /data/dsx"
+echo "8/10 Preparing downloaded files in /data/dsx"
 if [ ! -f "$DSX_USD_HOST" ]; then
   DSX_USD_FOUND="$(find "$DSX_DOWNLOAD_DIR" -path "*/DSX_BP/Assembly/DSX_Main_BP.usda" -print -quit)"
   if [ -z "$DSX_USD_FOUND" ]; then
@@ -369,24 +361,62 @@ if [ ! -f "$DSX_USD_HOST" ]; then
   exit 1
 fi
 
-echo "8/9 Chrome URL from MacBook"
-echo "http://${BREV_HOST}:8080?server=${BREV_HOST}&signalingPort=49100"
+echo "9/10 Starting Kit streaming server in the background"
+export USD_URL="$DSX_USD_HOST"
+pkill -f "repo.sh launch dsx_streaming.kit" >/dev/null 2>&1 || true
+nohup ./run_streaming.sh > "$KIT_LOG" 2>&1 &
+KIT_PID="$!"
+echo "Kit PID: $KIT_PID"
+echo "Kit log: $KIT_LOG"
+echo "Follow Kit startup with: tail -f $KIT_LOG"
 
-echo "9/9 Starting DSX with Docker Compose"
-export DSX_ASSETS_DIR=/data/dsx
-export USD_URL=/app/assets/DSX_BP/Assembly/DSX_Main_BP.usda
-
-if docker ps >/dev/null 2>&1; then
-  docker compose up --build
-else
-  sudo --preserve-env=DSX_ASSETS_DIR,USD_URL docker compose up --build
-fi
+echo "10/10 Starting web frontend"
+echo "Open this from Mac Chrome after the Vite server prints that it is ready:"
+echo "http://${BREV_HOST}:8081?server=${BREV_HOST}&signalingPort=49100"
+./run_web.sh
 ```
 
 When the web service is running, open the printed URL from Mac Chrome. It will look like this:
 
 ```text
-http://<brev-public-ip-or-hostname>:8080?server=<brev-public-ip-or-hostname>&signalingPort=49100
+http://<brev-public-ip-or-hostname>:8081?server=<brev-public-ip-or-hostname>&signalingPort=49100
+```
+
+The Kit server runs in the background and writes logs to:
+
+```bash
+tail -f ~/dsx-kit-streaming.log
+```
+
+To stop both processes:
+
+```bash
+pkill -f "repo.sh launch dsx_streaming.kit" || true
+pkill -f "vite" || true
+```
+
+## 11. Install Codex CLI On The Same Ubuntu Server
+
+Use this on the same Ubuntu server when you want to install the Codex CLI with npm in one copy/paste block. It reuses Node.js from step 10 if it is already installed.
+
+```bash
+set -euo pipefail
+
+echo "1/4 Ensuring Node.js and npm are installed"
+if ! command -v node >/dev/null 2>&1 || ! node --version | grep -Eq '^v20\.'; then
+  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+  sudo apt-get install -y nodejs
+fi
+
+echo "2/4 Installing Codex CLI with npm"
+sudo npm install -g @openai/codex
+
+echo "3/4 Verifying installation"
+codex --version
+
+echo "4/4 Starting Codex"
+echo "Run this in any repository directory:"
+echo "  codex"
 ```
 
 ---
