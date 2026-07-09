@@ -366,7 +366,7 @@ fi
 
 echo "9/10 Starting Kit streaming server in the background"
 export USD_URL="$DSX_USD_HOST"
-pkill -f "repo.sh launch dsx_streaming.kit" >/dev/null 2>&1 || true
+pkill -f "repo.sh launch dsx_streaming[.]kit" >/dev/null 2>&1 || true
 nohup ./run_streaming.sh > "$KIT_LOG" 2>&1 &
 KIT_PID="$!"
 echo "Kit PID: $KIT_PID"
