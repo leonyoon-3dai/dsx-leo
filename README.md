@@ -303,10 +303,14 @@ DSX_ASSETS_DIR_HOST="/data/dsx"
 DSX_USD_HOST="/data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda"
 BREV_HOST="${BREV_HOST:-$(curl -fsS https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')}"
 
-echo "1/8 Checking GPU"
+echo "1/9 Checking GPU"
 nvidia-smi
 
-echo "2/8 Cloning or updating repo"
+echo "2/9 Preparing /data/dsx"
+sudo mkdir -p "$DSX_ASSETS_DIR_HOST"
+sudo chown -R "$USER:$USER" "$DSX_ASSETS_DIR_HOST"
+
+echo "3/9 Cloning or updating repo"
 if [ ! -d "$REPO_DIR/.git" ]; then
   git clone "$REPO_URL" "$REPO_DIR"
 else
@@ -315,10 +319,10 @@ fi
 
 cd "$REPO_DIR"
 
-echo "3/8 Bootstrapping Ubuntu, Docker, NVIDIA Container Toolkit, Node.js, and submodules"
+echo "4/9 Bootstrapping Ubuntu, Docker, NVIDIA Container Toolkit, Node.js, and submodules"
 ./scripts/brev_bootstrap_ubuntu.sh
 
-echo "4/8 Installing NGC CLI if needed"
+echo "5/9 Installing NGC CLI if needed"
 sudo apt-get update
 sudo apt-get install -y curl unzip rsync
 if ! command -v ngc >/dev/null 2>&1; then
@@ -329,15 +333,13 @@ if ! command -v ngc >/dev/null 2>&1; then
 fi
 ngc --version
 
-echo "5/8 Downloading DSX Content Pack from NGC"
-sudo mkdir -p "$DSX_ASSETS_DIR_HOST"
-sudo chown -R "$USER:$USER" "$DSX_ASSETS_DIR_HOST"
+echo "6/9 Downloading DSX Content Pack from NGC"
 if [ ! -f "$DSX_USD_HOST" ]; then
   mkdir -p "$DSX_DOWNLOAD_DIR"
   ngc registry resource download-version "$NGC_RESOURCE" --dest "$DSX_DOWNLOAD_DIR"
 fi
 
-echo "6/8 Preparing /data/dsx"
+echo "7/9 Preparing downloaded files in /data/dsx"
 if [ ! -f "$DSX_USD_HOST" ]; then
   DSX_USD_FOUND="$(find "$DSX_DOWNLOAD_DIR" -path "*/DSX_BP/Assembly/DSX_Main_BP.usda" -print -quit)"
   if [ -z "$DSX_USD_FOUND" ]; then
@@ -367,10 +369,10 @@ if [ ! -f "$DSX_USD_HOST" ]; then
   exit 1
 fi
 
-echo "7/8 Chrome URL from MacBook"
+echo "8/9 Chrome URL from MacBook"
 echo "http://${BREV_HOST}:8080?server=${BREV_HOST}&signalingPort=49100"
 
-echo "8/8 Starting DSX with Docker Compose"
+echo "9/9 Starting DSX with Docker Compose"
 export DSX_ASSETS_DIR=/data/dsx
 export USD_URL=/app/assets/DSX_BP/Assembly/DSX_Main_BP.usda
 
