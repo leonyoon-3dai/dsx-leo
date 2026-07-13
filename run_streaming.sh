@@ -14,8 +14,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 cd "$SCRIPT_DIR"
 
-# Build if not already built
-if [ ! -d "_build" ]; then
+# Build if the runnable Kit binary is not already present. A partially created
+# _build directory isn't sufficient after an interrupted first build.
+if [ ! -x "_build/linux-x86_64/release/kit/kit" ]; then
     echo "Building Kit application first..."
 
     # 1. Initialize the kit-cae submodule
@@ -38,6 +39,10 @@ if [ ! -d "_build" ]; then
     echo "Building DSX application..."
     ./repo.sh build -r
 fi
+
+# Patch generated Python bundles after the first build and verify the result.
+# This is idempotent, so it is safe on every restart.
+./scripts/apply_kit_compat_fixes.sh
 
 # DSX uses its own web UI, so the built-in chat widget window is not needed.
 WIDGET_TOML="deps/kit-usd-agents/source/extensions/omni.ai.chat_usd.bundle/config/extension.toml"

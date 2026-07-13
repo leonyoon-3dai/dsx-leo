@@ -5,7 +5,9 @@
 ## and any modifications thereto.
 
 import inspect
+import importlib.machinery
 import os
+import sys
 from copy import deepcopy
 from pathlib import Path
 from typing import Optional
@@ -16,6 +18,62 @@ import omni.ext
 import omni.kit.app
 
 from .http_server import start_http_server, stop_http_server, set_kit_event_loop, set_lc_agent_refs
+
+# Kit's global pip archive preloads websockets 12, while the bundled NAT
+# runtime requires its own newer websockets package.  Once Python caches the
+# older package, NAT submodules otherwise resolve against a mixture of both
+# versions (missing backoff, InvalidProxyMessage, and related APIs).  Prefer
+# the NAT prebundle before importing any NAT modules below.
+_nat_prebundle = next(
+    (path for path in sys.path if path.endswith("omni.ai.langchain.nat/pip_nat_prebundle")),
+    None,
+)
+if not _nat_prebundle:
+    # The extension is imported before Kit adds the NAT extension's pip folder
+    # to sys.path on some startup orders.  Locate the release/debug bundle from
+    # this source checkout so the dependency set is still deterministic.
+    for _ancestor in Path(__file__).resolve().parents:
+        for _config in ("release", "debug"):
+            _candidate = (
+                _ancestor
+                / "_build"
+                / "linux-x86_64"
+                / _config
+                / "exts"
+                / "omni.ai.langchain.nat"
+                / "pip_nat_prebundle"
+            )
+            if _candidate.is_dir():
+                _nat_prebundle = str(_candidate)
+                break
+        if _nat_prebundle:
+            break
+if _nat_prebundle:
+    if _nat_prebundle in sys.path:
+        sys.path.remove(_nat_prebundle)
+    sys.path.insert(0, _nat_prebundle)
+
+    class _NATWebsocketsFinder:
+        """Resolve websockets exclusively from NAT ahead of Kit's pip finder."""
+
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname == "websockets":
+                search_path = [_nat_prebundle]
+            elif fullname.startswith("websockets."):
+                package_parts = fullname.split(".")[1:-1]
+                search_path = [str(Path(_nat_prebundle, "websockets", *package_parts))]
+            else:
+                return None
+            return importlib.machinery.PathFinder.find_spec(fullname, search_path)
+
+    sys.meta_path.insert(0, _NATWebsocketsFinder())
+    for _module_name in list(sys.modules):
+        if _module_name == "websockets" or _module_name.startswith("websockets."):
+            del sys.modules[_module_name]
+    # Import immediately while this path is first. Kit may reorder extension
+    # pip paths while later NAT modules are being discovered.
+    import websockets as _nat_websockets
+    print(f"[omni.ai.aiq.dsx] Using NAT websockets from {_nat_websockets.__file__}")
 
 # Lazy imports — these may not be available depending on which extensions are loaded
 load_and_override_config = None

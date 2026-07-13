@@ -1,11 +1,12 @@
 # Leo DSX Fresh Brev Runbook
 
-This is the tested path for a disposable NVIDIA Brev Ubuntu L40S server:
+This is the tested, repeatable path for a disposable NVIDIA Brev Ubuntu L40S server. It was last verified end-to-end on July 13, 2026, including a real NVIDIA-hosted LLM response:
 
 1. Add your SSH public key.
 2. Install Codex CLI.
-3. Run the DSX one-copy setup/start block.
-4. Optionally enable the AI Agent API.
+3. Authenticate NGC and download the DSX content pack.
+4. Run the DSX one-copy setup/start block.
+5. Enable and verify the AI Agent API.
 
 The runtime path uses `run_streaming.sh` for the Omniverse Kit streaming server and `run_web.sh` for the Vite web frontend. Docker Compose files remain in the repo for container work, but this runbook intentionally uses direct launch because it matches the current repo layout.
 
@@ -24,6 +25,23 @@ Open these inbound ports on the Brev server before using Mac Chrome:
 | WebRTC UDP helper | UDP | `1024` |
 
 Use the Brev public IP or hostname in the browser URL. From Mac Chrome, `localhost` means the Mac, not the Brev server.
+
+If UFW is enabled on the instance, apply the same rules at the OS level:
+
+```bash
+sudo ufw allow 8081/tcp
+sudo ufw allow 49100/tcp
+sudo ufw allow 8111/tcp
+sudo ufw allow 8012/tcp
+sudo ufw allow 47995:48012/tcp
+sudo ufw allow 47995:48012/udp
+sudo ufw allow 49000:49007/tcp
+sudo ufw allow 49000:49007/udp
+sudo ufw allow 1024/udp
+sudo ufw status
+```
+
+The Brev firewall/security-group rules must also allow these ports. Opening only UFW is not sufficient when the cloud-side rule is closed.
 
 ## 1. Add SSH Key
 
@@ -89,13 +107,52 @@ The current runbook also includes the fixes verified in this session:
 - The streaming app disables the built-in `omni.kit.viewport.ready` loading overlay, which caused the blue RTX loading spinner to remain visible even after the scene appeared.
 - The web client treats SDK stream `status` as authoritative, so a connected stream clears the loading UI even when SDK `action` is not exactly `start`.
 
-The DSX Content Pack is large, about 33GB compressed. Make sure the Brev disk has enough free space before running.
-
-If NGC asks for authentication, create an NGC API key and run this before the block:
+The DSX Content Pack is large: approximately 33GB compressed and substantially larger after extraction. Confirm free space first:
 
 ```bash
-export NGC_CLI_API_KEY="..."
+df -h / /data
 ```
+
+### 3.1 NGC authentication and prompt meanings
+
+Create an NGC API key in your NVIDIA NGC account. Never paste the key into this README, a Git commit, a chat message, or shell history. Read it silently into the current shell instead:
+
+```bash
+read -rsp "NGC API key: " NGC_CLI_API_KEY
+echo
+export NGC_CLI_API_KEY
+```
+
+The setup block installs NGC CLI before downloading. If you prefer a saved NGC CLI configuration, run `ngc config set` after the CLI is installed. Its prompts mean:
+
+- `Enter API key`: paste the NGC API key.
+- `Enter CLI output format type [ascii]. Choices: ['ascii', 'csv', 'json']:` press `Enter` to keep the normal human-readable `ascii` output.
+- `Enter org`: enter the exact NGC organization name associated with the key. A Brev instance name is not automatically an NGC organization.
+- Team/ACE prompts: press `Enter` unless your NGC organization explicitly requires one.
+
+`Invalid org. Please re-enter.` means the organization text is not available to that API key. Re-enter the exact organization shown by the NGC account selector; do not use the Brev machine name merely because it appears in the cloud console. The environment-variable method above is preferable for a disposable instance because it does not write the key to the repository.
+
+Confirm authentication without printing the secret:
+
+```bash
+test -n "${NGC_CLI_API_KEY:-}" && echo "NGC key is set" || echo "NGC key is missing"
+```
+
+### 3.2 Optional NVIDIA AI Agent key
+
+The viewer works without an AI key, but the Agent requires an API key from NVIDIA Build. Enter it silently before running the setup block:
+
+```bash
+read -rsp "NVIDIA API key: " NVIDIA_API_KEY
+echo
+export NVIDIA_API_KEY
+export DSX_AGENT_PORT=8012
+test -n "$NVIDIA_API_KEY" && echo "NVIDIA API key is set"
+```
+
+Do not type `export NVIDIA_API_KEY="nvapi-..."` directly on a shared machine: that form can remain in shell history. The setup never prints the key.
+
+### 3.3 Install, download, build, and start
 
 Copy and run this whole block on the Brev server:
 
@@ -109,8 +166,8 @@ DSX_DOWNLOAD_DIR="$HOME/ngc-dsx-download"
 DSX_ASSETS_DIR_HOST="/data/dsx"
 DSX_USD_HOST="/data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda"
 KIT_LOG="$HOME/dsx-kit-streaming.log"
+WEB_LOG="$HOME/dsx-web.log"
 SETUP_LOG="$HOME/dsx-setup-run.log"
-BREV_HOST="${BREV_HOST:-$(curl -fsS https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}' || hostname)}"
 
 mkdir -p "$(dirname "$SETUP_LOG")"
 exec > >(tee -a "$SETUP_LOG") 2>&1
@@ -125,8 +182,9 @@ sudo chown -R "$USER:$USER" "$DSX_ASSETS_DIR_HOST"
 
 echo "3/10 Installing base packages needed before clone/download"
 sudo apt-get update
-sudo apt-get install -y curl unzip rsync git git-lfs ca-certificates libglu1-mesa
+sudo apt-get install -y curl unzip rsync git git-lfs ca-certificates libglu1-mesa tmux
 git lfs install
+BREV_HOST="${BREV_HOST:-$(curl -fsS https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}' || hostname)}"
 
 echo "3b/10 Using public PyPI for Kit dependency builds"
 if [ -f /etc/pip.conf ] && grep -q "mcache-dsm.massedcompute.com" /etc/pip.conf; then
@@ -194,22 +252,39 @@ if [ ! -f "$DSX_USD_HOST" ]; then
   exit 1
 fi
 
-echo "9/10 Starting Kit streaming server in the background"
-export USD_URL="$DSX_USD_HOST"
-pkill -f "repo.sh launch dsx_streaming[.]kit" >/dev/null 2>&1 || true
-nohup ./run_streaming.sh > "$KIT_LOG" 2>&1 &
-KIT_PID="$!"
-echo "Kit PID: $KIT_PID"
+echo "9/10 Starting Kit streaming server in a persistent tmux session"
+tmux kill-session -t dsx-kit 2>/dev/null || true
+if [ -n "${NVIDIA_API_KEY:-}" ] && tmux has-session 2>/dev/null; then
+  tmux set-environment -g NVIDIA_API_KEY "$NVIDIA_API_KEY"
+  tmux set-environment -g DSX_AGENT_PORT "${DSX_AGENT_PORT:-8012}"
+fi
+tmux new-session -d -s dsx-kit \
+  "cd '$REPO_DIR' && export USD_URL='$DSX_USD_HOST' && exec ./run_streaming.sh >> '$KIT_LOG' 2>&1"
+if [ -n "${NVIDIA_API_KEY:-}" ]; then
+  tmux set-environment -g NVIDIA_API_KEY "$NVIDIA_API_KEY"
+  tmux set-environment -g DSX_AGENT_PORT "${DSX_AGENT_PORT:-8012}"
+fi
 echo "Kit log: $KIT_LOG"
-echo "Follow Kit startup with: tail -f $KIT_LOG"
 echo "Kit internal logs: ~/.nvidia-omniverse/logs/Kit/DSX\\ Streaming/2.0/"
 
-echo "10/10 Starting web frontend"
-echo "Open this from Mac Chrome after the Vite server prints that it is ready:"
-echo "http://${BREV_HOST}:8081?server=${BREV_HOST}&signalingPort=49100"
-echo "If using VS Code port forwarding for 8081, open:"
-echo "http://localhost:8081?server=${BREV_HOST}&signalingPort=49100"
-./run_web.sh
+echo "10/10 Starting web frontend in a persistent tmux session"
+tmux kill-session -t dsx-web 2>/dev/null || true
+tmux new-session -d -s dsx-web \
+  "cd '$REPO_DIR' && exec ./run_web.sh >> '$WEB_LOG' 2>&1"
+
+for _ in $(seq 1 60); do
+  if ss -lnt | grep -q ':8081 ' && ss -lnt | grep -q ':49100 '; then
+    break
+  fi
+  sleep 1
+done
+
+tmux list-sessions
+ss -lnt | grep -E ':(8081|49100|8012)\\b' || true
+echo "Open from Mac Chrome:"
+echo "http://${BREV_HOST}:8081/?server=${BREV_HOST}&signalingPort=49100"
+echo "If VS Code forwards only port 8081:"
+echo "http://localhost:8081/?server=${BREV_HOST}&signalingPort=49100"
 ```
 
 When the web server is running, open:
@@ -227,11 +302,14 @@ http://localhost:8081?server=<brev-public-ip-or-hostname>&signalingPort=49100
 Useful checks:
 
 ```bash
+tmux list-sessions
 tail -f ~/dsx-setup-run.log
 tail -f ~/dsx-kit-streaming.log
+tail -f ~/dsx-web.log
 ls -lt ~/.nvidia-omniverse/logs/Kit/DSX\ Streaming/2.0/kit_*.log | head
 ls -lh /data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
 ss -lntup | grep -E ':(8081|49100|8111|8012)\b'
+nvidia-smi
 ```
 
 If the web UI loads but the stream does not connect, check that the browser URL includes the Brev host twice:
@@ -256,22 +334,193 @@ grep -E 'libGLU|Failed to load MDL|HydraEngine rtx failed|app ready|livestream' 
 Stop DSX:
 
 ```bash
-pkill -f "repo.sh launch dsx_streaming[.]kit" || true
-pkill -f "vite" || true
+tmux kill-session -t dsx-kit 2>/dev/null || true
+tmux kill-session -t dsx-web 2>/dev/null || true
 ```
 
-## 4. Optional AI Agent API
+## 4. AI Agent verification
 
 The 3D viewer and configurator can run without an NVIDIA API key. The AI chat agent needs `NVIDIA_API_KEY`.
 
-To enable the AI agent on a fresh run, export the key before running step 3:
+Check that Kit sees the key without displaying it:
 
 ```bash
-export NVIDIA_API_KEY="nvapi-..."
-export DSX_AGENT_PORT=8012
+curl -sS http://127.0.0.1:8012/api/agent/health
 ```
 
-If DSX is already running, stop it, export the variables, then run step 3 again. The runbook reuses the downloaded DSX data and repo checkout, so the rerun is much faster.
+Expected fields:
+
+```json
+{"status":"healthy","agent":"DSX Agent AIQ","agent_available":true,"api_key_set":true}
+```
+
+Health alone does not prove that the LLM configuration can complete a request. Run a real chat test:
+
+```bash
+curl -sS --max-time 150 \
+  -H 'Content-Type: application/json' \
+  --data-binary '{"message":"한 문장으로 현재 지원 가능한 기능을 설명해줘.","user_id":"readme-test","history":[]}' \
+  http://127.0.0.1:8012/api/agent/chat
+```
+
+A successful response has a non-empty `response`, an `actions` array, and HTTP 200.
+
+### Add or replace the AI key while DSX is already running
+
+Enter the new key silently, copy it into tmux's global environment, and restart only Kit:
+
+```bash
+cd ~/dsx-leo
+read -rsp "NVIDIA API key: " NVIDIA_API_KEY
+echo
+export NVIDIA_API_KEY
+export DSX_AGENT_PORT=8012
+tmux kill-session -t dsx-kit 2>/dev/null || true
+if tmux has-session 2>/dev/null; then
+  tmux set-environment -g NVIDIA_API_KEY "$NVIDIA_API_KEY"
+  tmux set-environment -g DSX_AGENT_PORT "$DSX_AGENT_PORT"
+fi
+tmux new-session -d -s dsx-kit \
+  "cd '$HOME/dsx-leo' && export USD_URL=/data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda && exec ./run_streaming.sh >> '$HOME/dsx-kit-streaming.log' 2>&1"
+tmux set-environment -g NVIDIA_API_KEY "$NVIDIA_API_KEY"
+tmux set-environment -g DSX_AGENT_PORT "$DSX_AGENT_PORT"
+```
+
+Wait for port `8012`, then repeat the health and chat tests. The web session does not need to be restarted for an AI key change.
+
+## 5. Reopen or restart a Brev instance
+
+Stopping a cloud instance terminates the processes and tmux server. The silently exported API key is intentionally not persisted to disk, so enter it again after each instance reboot:
+
+```bash
+cd ~/dsx-leo
+git pull --ff-only
+
+read -rsp "NVIDIA API key: " NVIDIA_API_KEY
+echo
+export NVIDIA_API_KEY
+export DSX_AGENT_PORT=8012
+
+tmux kill-session -t dsx-kit 2>/dev/null || true
+if tmux has-session 2>/dev/null; then
+  tmux set-environment -g NVIDIA_API_KEY "$NVIDIA_API_KEY"
+  tmux set-environment -g DSX_AGENT_PORT "$DSX_AGENT_PORT"
+fi
+tmux new-session -d -s dsx-kit \
+  "cd '$HOME/dsx-leo' && export USD_URL=/data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda && exec ./run_streaming.sh >> '$HOME/dsx-kit-streaming.log' 2>&1"
+tmux set-environment -g NVIDIA_API_KEY "$NVIDIA_API_KEY"
+tmux set-environment -g DSX_AGENT_PORT "$DSX_AGENT_PORT"
+
+tmux kill-session -t dsx-web 2>/dev/null || true
+tmux new-session -d -s dsx-web \
+  "cd '$HOME/dsx-leo' && exec ./run_web.sh >> '$HOME/dsx-web.log' 2>&1"
+
+tmux list-sessions
+ss -lnt | grep -E ':(8081|49100|8012)\b'
+curl -sS http://127.0.0.1:8012/api/agent/health
+```
+
+The content pack under `/data/dsx` and the build under `~/dsx-leo/_build` are reused, so a normal restart is much faster than the first installation. If the Brev disk itself was deleted rather than merely stopped, repeat section 3 from the beginning.
+
+## 6. Problems encountered and verified solutions
+
+### The terminal closes or the server stops when SSH disconnects
+
+Cause: Kit or Vite was launched in a foreground shell, or the command failed during startup. Use the `dsx-kit` and `dsx-web` tmux sessions from this runbook. Inspect them and the persistent logs with:
+
+```bash
+tmux list-sessions
+tmux attach -t dsx-kit
+# Detach without stopping it: Ctrl+B, then D
+tail -n 200 ~/dsx-kit-streaming.log
+tail -n 100 ~/dsx-web.log
+```
+
+### NGC asks for an output format or reports `Invalid org`
+
+Press `Enter` at `[ascii]`. For the organization, use an exact organization available to the NGC key, not the Brev instance name. The silent `NGC_CLI_API_KEY` environment-variable method in section 3.1 avoids unnecessary saved configuration on disposable instances.
+
+### The 33GB download succeeds but `DSX_Main_BP.usda` is missing
+
+The NGC resource may contain a zip and an additional wrapper directory such as `DSX_BP_/DSX_BP`. The setup block searches both the download and extraction trees, then uses `rsync` to normalize the final location to:
+
+```text
+/data/dsx/DSX_BP/Assembly/DSX_Main_BP.usda
+```
+
+Diagnose a partial or nested extraction with:
+
+```bash
+find ~/ngc-dsx-download /data/dsx -path '*/DSX_BP/Assembly/DSX_Main_BP.usda' -print
+du -sh ~/ngc-dsx-download /data/dsx/* 2>/dev/null
+```
+
+An old wrapper directory can consume tens of gigabytes. Delete it only after the canonical USD above is present and Kit has loaded it successfully.
+
+### Kit reports `libGLU.so.1`, MDL, Hydra, or RTX initialization failures
+
+Install the missing runtime and restart Kit:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y libglu1-mesa
+```
+
+The setup block includes this package. Find the most relevant internal errors with:
+
+```bash
+LATEST_KIT_LOG="$(ls -t ~/.nvidia-omniverse/logs/Kit/DSX\ Streaming/2.0/kit_*.log | head -1)"
+grep -E 'libGLU|Failed to load MDL|HydraEngine rtx failed|app ready|livestream' "$LATEST_KIT_LOG" | tail -80
+```
+
+### Dependency installation hits a Brev pip cache license or payment error
+
+Some Brev images configure `/etc/pip.conf` with an internal cache. The setup block backs it up and switches to `https://pypi.org/simple` before the Kit build. The backup is `/etc/pip.conf.dsx-mcache-backup`.
+
+### The browser says the site cannot be reached or waits indefinitely
+
+Verify all three layers:
+
+1. `dsx-web` is listening on TCP `8081`.
+2. Kit is listening on TCP `49100`, and WebRTC UDP media ports are allowed.
+3. Both the Brev cloud firewall and UFW contain the rules in `Ports To Open`.
+
+```bash
+tmux list-sessions
+ss -lntup | grep -E ':(8081|49100|8012)\b'
+sudo ufw status
+```
+
+Use the current Brev public IP in both the browser host and `server=` query parameter. A connected client produces signaling TCP traffic and video commonly uses UDP port `47998` within the allowed range. High GPU utilization while the page is connected is a useful indication that frames are rendering.
+
+### The blue loading screen remains although the scene has loaded
+
+The streaming app and web client in this repository contain the verified loading-state fixes: the obsolete Kit viewport-ready overlay is disabled, and a connected SDK stream status clears the web loading UI. Pull the latest repository revision and rebuild if an older clone still shows this symptom.
+
+### Agent health is good but chat returns an invalid LLM/wrapper configuration
+
+The root cause was a Python package collision: Kit preloaded `websockets` 12 while NAT required its newer bundled version (`backoff`, `InvalidProxyMessage`, and proxy-related APIs). The DSX extension now routes only `websockets.*` imports to NAT's own prebundle before NAT registers its NIM/LangChain providers. Successful startup contains:
+
+```text
+[omni.ai.aiq.dsx] Using NAT websockets from .../omni.ai.langchain.nat/pip_nat_prebundle/...
+[omni.ai.aiq.dsx] NAT LLM and plugin registrations loaded
+```
+
+### Startup fails with `_TypedDictMeta.__new__()` and `extra_items`
+
+The generated `langchain_protocol` uses a newer TypedDict declaration than Kit's bundled `typing_extensions`. `run_streaming.sh` now calls `scripts/apply_kit_compat_fixes.sh` after the build and on every restart. The patch is idempotent and prints `Kit Python compatibility patch verified.` when successful.
+
+### Warnings about `platformdirs`, `nat.plugins.mcp`, audio, UDIM textures, or missing optional assets
+
+These appeared during the verified run but were non-fatal when all of the following succeeded: Kit printed `app ready`, ports `49100` and `8012` listened, the health endpoint returned healthy, and a real chat request returned HTTP 200. Investigate them only if the related optional feature or visible asset is actually missing.
+
+## 7. Security notes
+
+- Never commit NGC or NVIDIA API keys. Keys normally begin with sensitive prefixes and must be treated as passwords.
+- Use `read -rsp` so keys do not appear on screen or in shell history.
+- Health checks show only `api_key_set: true`; they do not print the key.
+- tmux environment variables survive SSH disconnects but not a full instance reboot.
+- Rotate any key that was pasted into a public issue, chat, terminal recording, or Git history.
 
 ---
 
